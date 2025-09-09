@@ -113,7 +113,9 @@
         activeMessageContent: '',
         isStreaming: false, // Indicates if currently processing an SSE stream
         typingIndicator: null,
-        sendingSpinner: null
+        sendingSpinner: null,
+        toolStatusShown: false, // Track if tool status message is currently displayed
+        toolStatusMessages: [] // Array to keep track of tool status messages for cleanup
       };
 
       // Container for DOM elements
@@ -203,7 +205,33 @@
      */
     _handleStreamEvent(eventName, data) {
         // console.log('SSE Event:', eventName, data);
-        if (eventName === 'thread.message.delta' && data.type === 'text_delta') {
+
+        // Handle tool processing steps
+        if (eventName === 'thread.run.step.delta' && data.delta && data.delta.step_details && data.delta.step_details.tool_calls) {
+            // Assistant is using tools (file_search, code_interpreter, etc.)
+            const tool_calls = data.delta.step_details.tool_calls;
+            tool_calls.forEach(tool_call => {
+                if (tool_call.type === 'file_search' && !this.streamState.toolStatusShown) {
+                    this._addMessage('system', '🔍 Searching knowledge base...');
+                    this.streamState.toolStatusShown = true;
+                } else if (tool_call.type === 'code_interpreter' && !this.streamState.toolStatusShown) {
+                    this._addMessage('system', '⚡ Processing with code execution...');
+                    this.streamState.toolStatusShown = true;
+                }
+            });
+        } else if (eventName === 'thread.run.step.completed' && this.streamState.toolStatusShown) {
+            // Tool processing completed, ready for response
+            this._addMessage('system', '✨ Generating response...');
+            // Remove the status message after a short delay
+            setTimeout(() => {
+                this._removeToolStatusMessages();
+            }, 2000);
+        }
+        // Handle message content
+        else if (eventName === 'thread.message.delta' && data.type === 'text_delta') {
+            // Remove any tool status messages before showing content
+            this._removeToolStatusMessages();
+
             if (!this.streamState.currentBotMessage && this.elements.chatMessages) {
                 // Create a new bot message bubble if one isn't active
                 this._addMessage('bot', ''); // Add an empty bot message, content will be filled
@@ -1308,6 +1336,22 @@
     }
 
     /**
+     * Remove all tool status messages
+     * @private
+     */
+    _removeToolStatusMessages() {
+      if (this.streamState.toolStatusMessages) {
+        this.streamState.toolStatusMessages.forEach(msg => {
+          if (msg && msg.parentNode) {
+            msg.parentNode.removeChild(msg);
+          }
+        });
+        this.streamState.toolStatusMessages = [];
+      }
+      this.streamState.toolStatusShown = false;
+    }
+
+    /**
      * Add a message to the chat
      * @param {string} type - Message type ('bot', 'user', or 'system')
      * @param {string} content - Message content
@@ -1322,6 +1366,14 @@
         systemMsg.className = `${this.namespace}-system-message`;
         systemMsg.textContent = content;
         this.elements.chatMessages.appendChild(systemMsg);
+
+        // Track tool status messages for cleanup
+        if (content.startsWith('🔍') || content.startsWith('⚡') || content.startsWith('✨')) {
+          if (!this.streamState.toolStatusMessages) {
+            this.streamState.toolStatusMessages = [];
+          }
+          this.streamState.toolStatusMessages.push(systemMsg);
+        }
 
         // Auto-hide specific system messages after 3 seconds
         if (content === 'Initializing chat session...' || content === 'Chat session started.' || content === 'Initializing session before sending...') {
