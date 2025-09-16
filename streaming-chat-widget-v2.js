@@ -228,7 +228,7 @@
             }, 2000);
         }
         // Handle message content
-        else if (eventName === 'thread.message.delta' && data.type === 'text_delta') {
+        else if (eventName === 'thread.message.delta') {
             // Remove any tool status messages before showing content
             this._removeToolStatusMessages();
 
@@ -240,10 +240,21 @@
                     this.streamState.currentBotMessage = lastBotMessageContainer.querySelector(`.${this.namespace}-bot-message`);
                 }
             }
-            // Accumulate content but don't render intermediate states
-            if (this.streamState.currentBotMessage) {
-                 this.streamState.activeMessageContent += data.content;
-                 // We will render the full content upon completion
+
+            // Parse the actual message content from OpenAI's structure
+            if (this.streamState.currentBotMessage && data.delta && data.delta.content) {
+                data.delta.content.forEach(contentPart => {
+                    if (contentPart.type === 'text' && contentPart.text && contentPart.text.value) {
+                        this.streamState.activeMessageContent += contentPart.text.value;
+
+                        // Immediate render for streaming effect - render raw text immediately
+                        const plainText = this.streamState.activeMessageContent.trim();
+                        this.streamState.currentBotMessage.textContent = plainText;
+
+                        // Scroll to bottom to show latest content
+                        this._scrollToBottom();
+                    }
+                });
             }
         } else if (eventName === 'thread.run.completed') {
              if (this.streamState.currentBotMessage && this.streamState.activeMessageContent) {
