@@ -1,6 +1,6 @@
 /**
  * StreamingChatWidgetV2 - A customizable chat widget that connects via Server-Sent Events
- * @version 1.0.6
+ * @version 1.0.7
  */
 (function(window) {
   'use strict';
