@@ -1,6 +1,6 @@
 /**
  * StreamingChatWidgetV2 - A customizable chat widget that connects via Server-Sent Events
- * @version 1.0.7
+ * @version 1.0.8
  */
 (function(window) {
   'use strict';
@@ -203,6 +203,82 @@
      * @param {object} data - The parsed data from the SSE event.
      * @private
      */
+    _sanitizeBotHtml(htmlContent) {
+      return DOMPurify.sanitize(htmlContent, {
+        ADD_TAGS: ['iframe', 'video', 'source'],
+        ALLOW_TAGS: ['b', 'i', 'em', 'strong', 'a', 'p', 'ul', 'ol', 'li', 'br', 'img', 'pre', 'code', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'span', 'div'],
+        ALLOW_ATTR: ['href', 'src', 'alt', 'title', 'target', 'rel', 'class', 'style', 'controls', 'autoplay', 'loop', 'muted', 'poster', 'preload', 'width', 'height', 'type', 'frameborder', 'allowfullscreen', 'allow', 'loading', 'referrerpolicy'],
+        ADD_ATTR: ['target', 'rel', 'loading', 'referrerpolicy']
+      });
+    }
+
+    _enhanceRenderedImages(rootEl) {
+      if (!rootEl) return;
+      rootEl.querySelectorAll('img').forEach((img) => {
+        img.setAttribute('referrerpolicy', 'no-referrer');
+        img.setAttribute('loading', 'lazy');
+        img.style.maxWidth = '100%';
+        img.style.height = 'auto';
+        img.style.display = 'block';
+        img.style.borderRadius = '6px';
+        img.style.margin = '8px 0';
+        img.addEventListener("error", function onImgError() {
+          img.removeEventListener("error", onImgError);
+          img.style.outline = '1px dashed #cbd5e1';
+          img.style.padding = '6px';
+          img.alt = (img.alt || 'Bild') + ' (kunde inte laddas)';
+        });
+      });
+    }
+
+    _finalizeBotMessageHtml() {
+      if (!this.streamState.currentBotMessage || !this.streamState.activeMessageContent) {
+        return false;
+      }
+
+      let content = this.streamState.activeMessageContent;
+
+      // Convert bare image URLs into markdown images
+      content = content.replace(/(^|\s)(https?:\/\/[^\s)]+?\.(?:png|jpe?g|gif|webp|avif))(?=$|[\s)\]])/gi, (full, lead, url) => {
+        return lead + '![Bild](' + url + ')';
+      });
+
+      const htmlContent = marked.parse(content);
+      this.streamState.currentBotMessage.innerHTML = this._sanitizeBotHtml(htmlContent);
+
+      const youtubeEmbedDiv = document.createElement('div');
+      youtubeEmbedDiv.innerHTML = this.streamState.currentBotMessage.innerHTML;
+      youtubeEmbedDiv.querySelectorAll('a').forEach(link => {
+        try {
+          const url = new URL(link.href);
+          let videoId = null;
+          if (url.hostname === 'www.youtube.com' || url.hostname === 'youtube.com') {
+            if (url.pathname === '/watch') videoId = url.searchParams.get('v');
+            else if (url.pathname.startsWith('/embed/')) videoId = url.pathname.substring('/embed/'.length);
+          } else if (url.hostname === 'youtu.be') {
+            videoId = url.pathname.substring(1);
+          }
+          if (videoId) {
+            const iframe = document.createElement('iframe');
+            iframe.setAttribute('src', 'https://www.youtube.com/embed/' + videoId);
+            iframe.setAttribute('width', '100%');
+            const parentWidth = this.streamState.currentBotMessage.offsetWidth || 300;
+            iframe.setAttribute('height', String(Math.round(parentWidth * 9 / 16)));
+            iframe.setAttribute('frameborder', '0');
+            iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture');
+            iframe.setAttribute('allowfullscreen', '');
+            link.parentNode.replaceChild(iframe, link);
+          }
+        } catch (e) {
+          console.warn('Could not process link for YouTube embed:', link.href, e);
+        }
+      });
+
+      this.streamState.currentBotMessage.innerHTML = youtubeEmbedDiv.innerHTML;
+      this._enhanceRenderedImages(this.streamState.currentBotMessage);
+      this._scrollToBottom();
+      return true;
+    }
     _handleStreamEvent(eventName, data) {
         // console.log('SSE Event:', eventName, data);
 
@@ -256,75 +332,26 @@
                     }
                 });
             }
-        } else if (eventName === 'thread.run.completed') {
-             if (this.streamState.currentBotMessage && this.streamState.activeMessageContent) {
-                // Now parse and render the complete message
-                let htmlContent = marked.parse(this.streamState.activeMessageContent);
-                this.streamState.currentBotMessage.innerHTML = DOMPurify.sanitize(htmlContent, {
-                    ADD_TAGS: ['iframe', 'video', 'source'],
-                    ALLOW_TAGS: ['b', 'i', 'em', 'strong', 'a', 'p', 'ul', 'ol', 'li', 'br', 'img', 'pre', 'code', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'span'],
-                    ALLOW_ATTR: ['href', 'src', 'alt', 'title', 'target', 'rel', 'class', 'style', 'controls', 'autoplay', 'loop', 'muted', 'poster', 'preload', 'width', 'height', 'type', 'frameborder', 'allowfullscreen', 'allow'],
-                    ADD_ATTR: ['target', 'rel']
-                });
-
-                // YouTube embed logic
-                const youtubeEmbedDiv = document.createElement('div');
-                youtubeEmbedDiv.innerHTML = this.streamState.currentBotMessage.innerHTML;
-
-                youtubeEmbedDiv.querySelectorAll('a').forEach(link => {
-                    try {
-                        const url = new URL(link.href);
-                        let videoId = null;
-
-                        if (url.hostname === 'www.youtube.com' || url.hostname === 'youtube.com') {
-                            if (url.pathname === '/watch') {
-                                videoId = url.searchParams.get('v');
-                            } else if (url.pathname.startsWith('/embed/')) {
-                                videoId = url.pathname.substring('/embed/'.length);
-                            }
-                        } else if (url.hostname === 'youtu.be') {
-                            videoId = url.pathname.substring(1);
-                        }
-
-                        if (videoId) {
-                            const iframe = document.createElement('iframe');
-                            iframe.setAttribute('src', `https://www.youtube.com/embed/${videoId}`);
-                            iframe.setAttribute('width', '100%');
-                            const parentWidth = this.streamState.currentBotMessage.offsetWidth || 300;
-                            iframe.setAttribute('height', `${Math.round(parentWidth * 9 / 16)}`);
-                            iframe.setAttribute('frameborder', '0');
-                            iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture');
-                            iframe.setAttribute('allowfullscreen', '');
-
-                            link.parentNode.replaceChild(iframe, link);
-                        }
-                    } catch (e) {
-                        console.warn("Could not process link for YouTube embed:", link.href, e);
-                    }
-                });
-
-                this.streamState.currentBotMessage.innerHTML = youtubeEmbedDiv.innerHTML;
-                this._scrollToBottom();
-             }
-            this.streamState.isStreaming = false;
-            this._removeTypingIndicator();
-            this.streamState.currentBotMessage = null;
-            this.streamState.activeMessageContent = '';
-        } else if (eventName === 'thread.run.failed' || eventName === 'error') {
+                } else if (eventName === 'thread.run.completed') {
+             this._finalizeBotMessageHtml();
+             this.streamState.isStreaming = false;
+             this._removeTypingIndicator();
+             this.streamState.currentBotMessage = null;
+             this.streamState.activeMessageContent = '';
+         } else if (eventName === 'thread.run.failed' || eventName === 'error') {
             this._addMessage('system', `Error: ${data.error || data.detail || 'An unknown error occurred.'}`);
             this.streamState.isStreaming = false;
             this._removeTypingIndicator();
             this.streamState.currentBotMessage = null;
             this.streamState.activeMessageContent = '';
-        } else if (eventName === 'stream_end') {
-            this.streamState.isStreaming = false;
-            this._removeTypingIndicator();
-            if (this.streamState.currentBotMessage && this.streamState.activeMessageContent === '') {
-                // Optional: remove empty bot message bubble if stream ended abruptly
-            }
-            this.streamState.currentBotMessage = null;
-            this.streamState.activeMessageContent = '';
-        }
+                } else if (eventName === 'stream_end') {
+             // Ensure markdown/images are rendered even if completed event was missed
+             this._finalizeBotMessageHtml();
+             this.streamState.isStreaming = false;
+             this._removeTypingIndicator();
+             this.streamState.currentBotMessage = null;
+             this.streamState.activeMessageContent = '';
+         }
     }
 
     /**
